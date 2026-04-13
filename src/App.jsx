@@ -525,8 +525,8 @@ const panelSubStyle = {
 
 function Panel({ title, subtitle, children, style }) {
   return (
-    <div style={{ ...panelStyle, ...style }}>
-      <div style={panelTitleStyle}>{title}</div>
+    <div className="panel" style={{ ...panelStyle, ...style }}>
+      <div className="panel-title" style={panelTitleStyle}>{title}</div>
       {subtitle && <div style={panelSubStyle}>{subtitle}</div>}
       {children}
     </div>
@@ -1166,7 +1166,7 @@ function HeatmapGrid({ events, people }) {
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",
+          gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))",
           gap: 14,
         }}
       >
@@ -1406,6 +1406,7 @@ export default function BeerTracker() {
 
   return (
     <div
+      className="main-container"
       style={{
         minHeight: "100vh",
         background:
@@ -1419,11 +1420,50 @@ export default function BeerTracker() {
         @import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,wght@0,300;0,500;0,700;1,500&family=Instrument+Sans:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap');
         * { box-sizing: border-box; }
         .tt-file-label:hover { background: rgba(244,185,66,0.15) !important; }
+
+        /* --- Layout grid (12 columns desktop, collapses on mobile) --- */
+        .chart-grid {
+          display: grid;
+          grid-template-columns: repeat(12, 1fr);
+          gap: 20px;
+        }
+        .col-6  { grid-column: span 6;  min-width: 0; }
+        .col-12 { grid-column: span 12; min-width: 0; }
+
+        /* Tablets and small laptops: collapse two-column rows to one */
+        @media (max-width: 900px) {
+          .col-6 { grid-column: span 12; }
+          .chart-grid { gap: 16px; }
+        }
+
+        /* Phones: tighten padding, stack the masthead, smaller chart panels */
+        @media (max-width: 600px) {
+          .main-container { padding: 28px 16px 60px !important; }
+          .masthead {
+            flex-direction: column !important;
+            align-items: flex-start !important;
+            gap: 18px !important;
+            margin-bottom: 28px !important;
+          }
+          .masthead-controls {
+            align-items: flex-start !important;
+            width: 100%;
+          }
+          .panel { padding: 20px 18px 18px !important; }
+          .panel-title { font-size: 19px !important; }
+          .stat-row { gap: 12px !important; }
+        }
+
+        /* Touch devices: make tappable things at least 36px tall */
+        @media (hover: none) and (pointer: coarse) {
+          .tt-chip { min-height: 32px; }
+          .tt-quick { min-height: 32px; }
+        }
       `}</style>
 
       <div style={{ maxWidth: 1280, margin: "0 auto" }}>
         {/* ---- Masthead ---- */}
-        <header style={{ marginBottom: 40, display: "flex", alignItems: "flex-end", justifyContent: "space-between", flexWrap: "wrap", gap: 20 }}>
+        <header className="masthead" style={{ marginBottom: 40, display: "flex", alignItems: "flex-end", justifyContent: "space-between", flexWrap: "wrap", gap: 20 }}>
           <div>
             <div
               style={{
@@ -1465,7 +1505,7 @@ export default function BeerTracker() {
             </div>
           </div>
 
-          <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 10 }}>
+          <div className="masthead-controls" style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 10 }}>
             <label
               className="tt-file-label"
               style={{
@@ -1511,9 +1551,10 @@ export default function BeerTracker() {
 
         {/* ---- Scoreboard strip ---- */}
         <div
+          className="stat-row"
           style={{
             display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+            gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
             gap: 16,
             marginBottom: 28,
           }}
@@ -1525,8 +1566,8 @@ export default function BeerTracker() {
         </div>
 
         {/* ---- Grid of charts ---- */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(12, 1fr)", gap: 20 }}>
-          <div style={{ gridColumn: "span 6", minWidth: 0 }}>
+        <div className="chart-grid">
+          <div className="col-6">
             <Leaderboard
               data={sinceTotals}
               title="Since"
@@ -1554,10 +1595,10 @@ export default function BeerTracker() {
               people={people}
             />
           </div>
-          <div style={{ gridColumn: "span 6", minWidth: 0 }}>
+          <div className="col-6">
             <Leaderboard data={allTime} title="All-time" subtitle="Since the beginning" people={people} />
           </div>
-          <div style={{ gridColumn: "span 12", minWidth: 0 }}>
+          <div className="col-12">
             <PersonSelector
               people={people}
               selected={visiblePeople}
@@ -1567,33 +1608,33 @@ export default function BeerTracker() {
               onReset={resetVisible}
             />
           </div>
-          <div style={{ gridColumn: "span 12", minWidth: 0 }}>
+          <div className="col-12">
             <CumulativeChart
               rows={cumul.rows}
               people={cumul.people}
               selectedPeople={visiblePeople}
             />
           </div>
-          <div style={{ gridColumn: "span 12", minWidth: 0 }}>
+          <div className="col-12">
             <StackedCumulativeChart
               rows={cumul.rows}
               people={cumul.people}
               selectedPeople={visiblePeople}
             />
           </div>
-          <div style={{ gridColumn: "span 12", minWidth: 0 }}>
+          <div className="col-12">
             <ForecastChart forecast={forecast} />
           </div>
-          <div style={{ gridColumn: "span 6", minWidth: 0 }}>
+          <div className="col-6">
             <DayOfWeekChart data={dow} />
           </div>
-          <div style={{ gridColumn: "span 6", minWidth: 0 }}>
+          <div className="col-6">
             <HourOfDayChart data={hod} />
           </div>
-          <div style={{ gridColumn: "span 12", minWidth: 0 }}>
+          <div className="col-12">
             <HeatmapGrid events={events} people={people} />
           </div>
-          <div style={{ gridColumn: "span 12", minWidth: 0 }}>
+          <div className="col-12">
             <HallOfFame sessions={sessions} people={people} />
           </div>
         </div>
