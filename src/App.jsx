@@ -184,49 +184,25 @@ function extractMessageValue(body, { includePhotos = true } = {}) {
    ========================================================================== */
 
 /* ----------------------------------------------------------------------------
-   Checkpoint-anchored deduplication.
+   Aggressive same-time deduplication.
 
-   Each posted number is the group's running drink counter — authoritative.
-   Walk events in chronological order; the LAST legitimate numeric message
-   (ignoring typos that jump wildly up) tells us the true drink count at
-   that point in time. Any raw row count > (last_number + rows_since) means
-   some rows are duplicates (photo + number pairs for the same drink).
+   Common posting pattern in this group: someone posts a photo, then in the
+   next minute types the new counter value as a follow-up message for the
+   SAME drink. Treat those two rows as one drink. If the toggle is off,
+   every row is kept as a distinct drink.
 
-   We remove the excess by preferentially dropping the photo half of
-   same-author-same-minute photo→number adjacent pairs, working backwards
-   from the most recent (closest to the anchor, most reliable signal). This
-   matches the reporting pattern Luke described: someone posts a photo,
-   then types the new counter value as a follow-up message for the same
-   drink.
+   Rules:
+     · Both rows are from the same author.
+     · They're adjacent in time order (nobody else posted between them).
+     · Their timestamps are within DEDUPE_WINDOW_MS of each other.
+     · One is a media row and the other is a numeric row (either order).
 
-   If the toggle is off, every row is kept as a distinct drink.
+   Heads up: because your chat's running counter increments once per row
+   (including double-posts), the dedup'd total will be LOWER than the
+   counter's current value. That's the honest count of distinct drinks.
    --------------------------------------------------------------------------- */
 
-// Max plausible jump between two consecutive numeric checkpoints. Anything
-// larger is treated as a typo. In a group of ~33 people, even the most
-// prolific day is well under 1000 drinks.
-const MAX_CHECKPOINT_JUMP = 1000;
-
-function findLastCheckpoint(typed) {
-  let lastNum = null;
-  let lastRow = -1;
-  for (let i = 0; i < typed.length; i++) {
-    const e = typed[i];
-    if (e.number == null) continue;
-    if (lastNum == null) {
-      // First checkpoint: accept if the number doesn't wildly exceed the
-      // number of rows seen so far
-      if (e.number <= i + 1 + MAX_CHECKPOINT_JUMP) {
-        lastNum = e.number;
-        lastRow = i;
-      }
-    } else if (e.number > lastNum && e.number < lastNum + MAX_CHECKPOINT_JUMP) {
-      lastNum = e.number;
-      lastRow = i;
-    }
-  }
-  return lastNum == null ? null : { row: lastRow, number: lastNum };
-}
+const DEDUPE_WINDOW_MS = 2 * 60 * 1000;
 
 function buildDrinkEvents(messages, opts = {}) {
   const { mergePairs = true, includePhotos = true } = opts;
@@ -243,40 +219,19 @@ function buildDrinkEvents(messages, opts = {}) {
     return typed.map((t) => ({ ...t, count: 1 }));
   }
 
-  const checkpoint = findLastCheckpoint(typed);
-  if (!checkpoint) {
-    return typed.map((t) => ({ ...t, count: 1 }));
-  }
-
-  // Implied true total at the end of the chat:
-  //   checkpoint number + rows posted after the checkpoint
-  const impliedTotal = checkpoint.number + (typed.length - checkpoint.row - 1);
-  const excess = typed.length - impliedTotal;
-  if (excess <= 0) {
-    return typed.map((t) => ({ ...t, count: 1 }));
-  }
-
-  // Collect all same-author same-minute photo→number adjacent pairs.
-  // These are the candidates for removal (drop the photo half).
-  const pairs = [];
+  const toRemove = new Set();
   for (let i = 0; i < typed.length - 1; i++) {
+    if (toRemove.has(i) || toRemove.has(i + 1)) continue;
     const a = typed[i];
     const b = typed[i + 1];
-    if (
-      a.kind === "media" &&
-      b.kind === "number" &&
-      a.author === b.author &&
-      a.date.getTime() === b.date.getTime()
-    ) {
-      pairs.push(i); // the photo row index
+    if (b.date - a.date > DEDUPE_WINDOW_MS) continue;
+    if (a.author !== b.author) continue;
+    const oneOfEach =
+      (a.kind === "media" && b.kind === "number") ||
+      (a.kind === "number" && b.kind === "media");
+    if (oneOfEach) {
+      toRemove.add(i + 1); // drop the later row, keep the earlier timestamp
     }
-  }
-
-  // Remove `excess` rows, preferring the most recent pairs (nearer to the
-  // anchor → higher confidence they represent the pattern we've verified).
-  const toRemove = new Set();
-  for (let k = pairs.length - 1; k >= 0 && toRemove.size < excess; k--) {
-    toRemove.add(pairs[k]);
   }
 
   const events = [];
@@ -613,7 +568,11 @@ function Leaderboard({ data, title, subtitle, people }) {
   );
 }
 
-function CumulativeChart({ rows, people }) {
+function CumulativeChart({ rows, people, selectedPeople }) {
+  // If selectedPeople is a Set, show only those; otherwise show all
+  const visible = selectedPeople
+    ? people.filter((p) => selectedPeople.has(p))
+    : people;
   return (
     <Panel title="The long haul" subtitle="Cumulative drinks over time">
       <ResponsiveContainer width="100%" height={340}>
@@ -635,7 +594,7 @@ function CumulativeChart({ rows, people }) {
             labelStyle={{ color: "#f5e6c8" }}
           />
           <Legend wrapperStyle={{ fontFamily: "'Instrument Sans', sans-serif", fontSize: 12 }} />
-          {people.map((p) => (
+          {visible.map((p) => (
             <Line
               key={p}
               type="monotone"
@@ -644,6 +603,7 @@ function CumulativeChart({ rows, people }) {
               strokeWidth={2.5}
               dot={false}
               activeDot={{ r: 5 }}
+              isAnimationActive={false}
             />
           ))}
         </LineChart>
@@ -772,13 +732,17 @@ function SeasonalitySparkline({ seasonal }) {
   );
 }
 
-function StackedCumulativeChart({ rows, people }) {
+function StackedCumulativeChart({ rows, people, selectedPeople }) {
+  const visible = selectedPeople
+    ? people.filter((p) => selectedPeople.has(p))
+    : people;
   return (
     <Panel title="The rising tide" subtitle="Stacked contributions to the group total">
       <ResponsiveContainer width="100%" height={340}>
         <AreaChart data={rows} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
           <defs>
-            {people.map((p, i) => {
+            {visible.map((p) => {
+              const i = people.indexOf(p);
               const c = colourFor(p, people);
               return (
                 <linearGradient key={p} id={`stack-grad-${i}`} x1="0" y1="0" x2="0" y2="1">
@@ -807,21 +771,108 @@ function StackedCumulativeChart({ rows, people }) {
             itemSorter={(item) => -item.value}
           />
           <Legend wrapperStyle={{ fontFamily: "'Instrument Sans', sans-serif", fontSize: 12 }} />
-          {people.map((p, i) => (
-            <Area
-              key={p}
-              type="monotone"
-              dataKey={p}
-              stackId="1"
-              stroke={colourFor(p, people)}
-              strokeWidth={1.5}
-              fill={`url(#stack-grad-${i})`}
-              isAnimationActive={false}
-            />
-          ))}
+          {visible.map((p) => {
+            const i = people.indexOf(p);
+            return (
+              <Area
+                key={p}
+                type="monotone"
+                dataKey={p}
+                stackId="1"
+                stroke={colourFor(p, people)}
+                strokeWidth={1.5}
+                fill={`url(#stack-grad-${i})`}
+                isAnimationActive={false}
+              />
+            );
+          })}
         </AreaChart>
       </ResponsiveContainer>
     </Panel>
+  );
+}
+
+function PersonSelector({ people, selected, onToggle, onAll, onNone, onReset }) {
+  return (
+    <Panel title="Focus" subtitle="Pick who to show in the line & stacked charts">
+      <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
+        <QuickButton onClick={onReset}>top 10</QuickButton>
+        <QuickButton onClick={onAll}>all</QuickButton>
+        <QuickButton onClick={onNone}>none</QuickButton>
+        <div
+          style={{
+            fontFamily: "'Geist Mono', monospace",
+            fontSize: 10,
+            color: "rgba(245,230,200,0.5)",
+            alignSelf: "center",
+            marginLeft: "auto",
+          }}
+        >
+          {selected.size} of {people.length} selected
+        </div>
+      </div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+        {people.map((p) => {
+          const isOn = selected.has(p);
+          const colour = colourFor(p, people);
+          return (
+            <button
+              key={p}
+              onClick={() => onToggle(p)}
+              style={{
+                fontFamily: "'Instrument Sans', sans-serif",
+                fontSize: 12,
+                padding: "5px 11px",
+                border: `1px solid ${isOn ? colour : "rgba(244,185,66,0.15)"}`,
+                borderRadius: 999,
+                background: isOn
+                  ? `${colour}22`
+                  : "rgba(255,255,255,0.02)",
+                color: isOn ? "#f5e6c8" : "rgba(245,230,200,0.45)",
+                cursor: "pointer",
+                transition: "all 0.15s",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 7,
+              }}
+            >
+              <span
+                style={{
+                  display: "inline-block",
+                  width: 7,
+                  height: 7,
+                  borderRadius: "50%",
+                  background: isOn ? colour : "rgba(245,230,200,0.2)",
+                }}
+              />
+              {p}
+            </button>
+          );
+        })}
+      </div>
+    </Panel>
+  );
+}
+
+function QuickButton({ children, onClick }) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        fontFamily: "'Geist Mono', monospace",
+        fontSize: 10,
+        textTransform: "uppercase",
+        letterSpacing: "0.12em",
+        padding: "6px 12px",
+        border: "1px solid rgba(244,185,66,0.3)",
+        borderRadius: 4,
+        background: "rgba(244,185,66,0.05)",
+        color: "#f4b942",
+        cursor: "pointer",
+      }}
+    >
+      {children}
+    </button>
   );
 }
 
@@ -1097,10 +1148,20 @@ function Heatmap({ grid, color, name, total }) {
 }
 
 function HeatmapGrid({ events, people }) {
+  // Compute each person's grid and total once, then sort by total descending
+  // so the heaviest drinkers appear first in the small-multiples layout.
+  const entries = people
+    .map((p) => {
+      const grid = personHeatmap(events, p);
+      const total = grid.flat().reduce((s, v) => s + v, 0);
+      return { name: p, grid, total };
+    })
+    .sort((a, b) => b.total - a.total);
+
   return (
     <Panel
       title="Rhythms of the week"
-      subtitle="Per-person · day × 3-hour block"
+      subtitle="Per-person · day × 3-hour block · ordered by total"
     >
       <div
         style={{
@@ -1109,19 +1170,15 @@ function HeatmapGrid({ events, people }) {
           gap: 14,
         }}
       >
-        {people.map((p) => {
-          const grid = personHeatmap(events, p);
-          const total = grid.flat().reduce((s, v) => s + v, 0);
-          return (
-            <Heatmap
-              key={p}
-              grid={grid}
-              color={colourFor(p, people)}
-              name={p}
-              total={total}
-            />
-          );
-        })}
+        {entries.map(({ name, grid, total }) => (
+          <Heatmap
+            key={name}
+            grid={grid}
+            color={colourFor(name, people)}
+            name={name}
+            total={total}
+          />
+        ))}
       </div>
     </Panel>
   );
@@ -1244,6 +1301,15 @@ export default function BeerTracker() {
   const [fileName, setFileName] = useState("sample data");
   const [lastUpdated, setLastUpdated] = useState(null);
   const [mergePairs, setMergePairs] = useState(true);
+  // Date-range leaderboard: default to 30 days ago. User can change via date input.
+  const [sinceDate, setSinceDate] = useState(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 30);
+    return d.toISOString().slice(0, 10);
+  });
+  // Which people are visible in the line / stacked-area charts.
+  // null = default (top 10 by all-time); any Set = explicit user choice.
+  const [visibleOverride, setVisibleOverride] = useState(null);
 
   // On mount, try to fetch a bundled chat.txt from the site root. This is
   // how the hosted version works: you commit the WhatsApp export to
@@ -1285,7 +1351,14 @@ export default function BeerTracker() {
   const mergedPairCount = rawEventCount - events.length;
   const people = useMemo(() => [...new Set(events.map((e) => e.author))], [events]);
   const allTime = useMemo(() => totalsByPerson(events), [events]);
-  const weekly = useMemo(() => thisWeekTotals(events), [events]);
+  const sinceTotals = useMemo(() => {
+    // Parse YYYY-MM-DD as LOCAL midnight (not UTC) to avoid timezone surprises
+    // where a drink posted at 11pm Jan 31 locally ends up on Feb 1 in UTC.
+    const [y, m, d] = sinceDate.split("-").map(Number);
+    if (!y || !m || !d) return [];
+    const cutoff = new Date(y, m - 1, d);
+    return totalsByPerson(events.filter((e) => e.date >= cutoff));
+  }, [events, sinceDate]);
   const cumul = useMemo(() => cumulativeSeries(events), [events]);
   const dow = useMemo(() => dayOfWeekTotals(events), [events]);
   const hod = useMemo(() => hourOfDayTotals(events), [events]);
@@ -1295,6 +1368,30 @@ export default function BeerTracker() {
     () => forecastWithSeasonality(dailyTotals, GROUP_TARGET),
     [dailyTotals]
   );
+
+  // Default visible set = top 10 by all-time. If user has made an explicit
+  // selection via the Focus panel, that overrides the default.
+  const defaultVisible = useMemo(
+    () => new Set(allTime.slice(0, 10).map((p) => p.name)),
+    [allTime]
+  );
+  const visiblePeople = visibleOverride ?? defaultVisible;
+
+  const toggleVisible = useCallback(
+    (name) => {
+      setVisibleOverride((prev) => {
+        const base = prev ?? new Set(allTime.slice(0, 10).map((p) => p.name));
+        const next = new Set(base);
+        if (next.has(name)) next.delete(name);
+        else next.add(name);
+        return next;
+      });
+    },
+    [allTime]
+  );
+  const setVisibleAll = useCallback(() => setVisibleOverride(new Set(people)), [people]);
+  const setVisibleNone = useCallback(() => setVisibleOverride(new Set()), []);
+  const resetVisible = useCallback(() => setVisibleOverride(null), []);
 
   const onFile = useCallback((e) => {
     const file = e.target.files?.[0];
@@ -1430,16 +1527,59 @@ export default function BeerTracker() {
         {/* ---- Grid of charts ---- */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(12, 1fr)", gap: 20 }}>
           <div style={{ gridColumn: "span 6", minWidth: 0 }}>
-            <Leaderboard data={weekly} title="This week" subtitle="Monday reset" people={people} />
+            <Leaderboard
+              data={sinceTotals}
+              title="Since"
+              subtitle={
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                  from{" "}
+                  <input
+                    type="date"
+                    value={sinceDate}
+                    onChange={(e) => setSinceDate(e.target.value)}
+                    style={{
+                      background: "rgba(244,185,66,0.05)",
+                      border: "1px solid rgba(244,185,66,0.3)",
+                      borderRadius: 4,
+                      padding: "4px 8px",
+                      color: "#f5e6c8",
+                      fontFamily: "'Geist Mono', monospace",
+                      fontSize: 11,
+                      cursor: "pointer",
+                      colorScheme: "dark",
+                    }}
+                  />
+                </span>
+              }
+              people={people}
+            />
           </div>
           <div style={{ gridColumn: "span 6", minWidth: 0 }}>
             <Leaderboard data={allTime} title="All-time" subtitle="Since the beginning" people={people} />
           </div>
           <div style={{ gridColumn: "span 12", minWidth: 0 }}>
-            <CumulativeChart rows={cumul.rows} people={cumul.people} />
+            <PersonSelector
+              people={people}
+              selected={visiblePeople}
+              onToggle={toggleVisible}
+              onAll={setVisibleAll}
+              onNone={setVisibleNone}
+              onReset={resetVisible}
+            />
           </div>
           <div style={{ gridColumn: "span 12", minWidth: 0 }}>
-            <StackedCumulativeChart rows={cumul.rows} people={cumul.people} />
+            <CumulativeChart
+              rows={cumul.rows}
+              people={cumul.people}
+              selectedPeople={visiblePeople}
+            />
+          </div>
+          <div style={{ gridColumn: "span 12", minWidth: 0 }}>
+            <StackedCumulativeChart
+              rows={cumul.rows}
+              people={cumul.people}
+              selectedPeople={visiblePeople}
+            />
           </div>
           <div style={{ gridColumn: "span 12", minWidth: 0 }}>
             <ForecastChart forecast={forecast} />
@@ -1472,7 +1612,7 @@ export default function BeerTracker() {
         >
           How to export: in WhatsApp, open the group → group name → <em>Export chat</em> → <em>Without media</em> → save the .txt and drop it above.
           <br />
-          Parser rules: each row in the export represents one drink — a photo <em>(&lt;Media omitted&gt;)</em> or a running-total number. Deleted messages are skipped. Dedup anchors on the latest posted number: the true total is <em>(last number + rows since)</em>, and excess rows are removed from same-author same-minute photo→number adjacent pairs working backwards from the anchor. Flip the toggle above to see the raw (undeduped) count.
+          Parser rules: each row in the export represents one drink — a photo <em>(&lt;Media omitted&gt;)</em> or a numeric counter update. Deleted messages are skipped. When the same person posts a photo and a number within 2 minutes of each other, they're treated as one drink and the later row is dropped. This makes the total lower than the chat's running counter, which has been ticking up once per row including double-posts. Flip the toggle above to see the raw (undeduped) count.
         </footer>
       </div>
     </div>
