@@ -1475,7 +1475,7 @@ export default function BeerTracker() {
                 marginBottom: 8,
               }}
             >
-              Est. 2026 · The Taproom
+              Est. 2026 · The Taproom 
             </div>
             <h1
               style={{
@@ -1489,7 +1489,7 @@ export default function BeerTracker() {
                 color: "#f5e6c8",
               }}
             >
-              The <span style={{ fontStyle: "normal", fontWeight: 500, color: "#f4b942" }}>Ledger</span>
+              The <span style={{ fontStyle: "normal", fontWeight: 500, color: "#f4b942" }}>State of the Beers</span>
             </h1>
             <div
               style={{
@@ -1501,7 +1501,7 @@ export default function BeerTracker() {
                 maxWidth: 520,
               }}
             >
-              A running tally of pints, glasses and occasional regrets — parsed straight from your group chat.
+              The official Road to 10,000 Pints App, created by Max and Ro
             </div>
           </div>
 
