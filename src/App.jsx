@@ -202,7 +202,7 @@ function extractMessageValue(body, { includePhotos = true } = {}) {
    counter's current value. That's the honest count of distinct drinks.
    --------------------------------------------------------------------------- */
 
-const DEDUPE_WINDOW_MS = 2 * 60 * 1000;
+const DEDUPE_WINDOW_MS = 3 * 60 * 1000;
 
 function buildDrinkEvents(messages, opts = {}) {
   const { mergePairs = true, includePhotos = true } = opts;
