@@ -828,7 +828,7 @@ function PersonSelector({ people, selected, onToggle, onAll, onNone, onReset }) 
                 background: isOn
                   ? `${colour}22`
                   : "rgba(255,255,255,0.02)",
-                color: isOn ? "#f5e6c8" : "rgba(245,230,200,0.45)",
+                color: isOn ? "#f5e6c8" : "rgba(245,185,66,0.15)",
                 cursor: "pointer",
                 transition: "all 0.15s",
                 display: "inline-flex",
