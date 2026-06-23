@@ -219,26 +219,36 @@ function buildDrinkEvents(messages, opts = {}) {
     return typed.map((t) => ({ ...t, count: 1 }));
   }
 
-  const toRemove = new Set();
-  for (let i = 0; i < typed.length - 1; i++) {
-    if (toRemove.has(i) || toRemove.has(i + 1)) continue;
-    const a = typed[i];
-    const b = typed[i + 1];
-    if (b.date - a.date > DEDUPE_WINDOW_MS) continue;
-    if (a.author !== b.author) continue;
-    const oneOfEach =
-      (a.kind === "media" && b.kind === "number") ||
-      (a.kind === "number" && b.kind === "media");
-    if (oneOfEach) {
-      toRemove.add(i + 1); // drop the later row, keep the earlier timestamp
+  // Per-author sliding window dedup.
+  //
+  // The old approach only checked adjacent rows (i vs i+1), which missed pairs
+  // separated by another person's message, and also failed to collapse runs of
+  // 3+ posts from the same author within the window (e.g. two images + a number).
+  //
+  // New approach: track the timestamp of the last KEPT event per author. Any
+  // subsequent event from that author within DEDUPE_WINDOW_MS is dropped,
+  // regardless of what other authors posted in between.
+  //
+  // This correctly handles:
+  //   · photo … [other person] … number  (non-adjacent same-author pair)
+  //   · photo … photo                    (duplicate images of same beer)
+  //   · number … number                  (duplicate counter bumps)
+  //   · number … photo … number          (any ordering)
+
+  const lastKeptAt = new Map(); // author → timestamp (ms) of last kept event
+  const events = [];
+
+  for (const t of typed) {
+    const ts = t.date.getTime();
+    const last = lastKeptAt.get(t.author);
+    if (last !== undefined && ts - last <= DEDUPE_WINDOW_MS) {
+      // Within the window for this author — drop as duplicate
+      continue;
     }
+    lastKeptAt.set(t.author, ts);
+    events.push({ ...t, count: 1 });
   }
 
-  const events = [];
-  for (let i = 0; i < typed.length; i++) {
-    if (toRemove.has(i)) continue;
-    events.push({ ...typed[i], count: 1 });
-  }
   return events;
 }
 
@@ -1653,7 +1663,7 @@ export default function BeerTracker() {
         >
           How to export: in WhatsApp, open the group → group name → <em>Export chat</em> → <em>Without media</em> → save the .txt and drop it above.
           <br />
-          Parser rules: each row in the export represents one drink — a photo <em>(&lt;Media omitted&gt;)</em> or a numeric counter update. Deleted messages are skipped. When the same person posts a photo and a number within 2 minutes of each other, they're treated as one drink and the later row is dropped. This makes the total lower than the chat's running counter, which has been ticking up once per row including double-posts. Flip the toggle above to see the raw (undeduped) count.
+          Parser rules: each row in the export represents one drink — a photo <em>(&lt;Media omitted&gt;)</em> or a numeric counter update. Deleted messages are skipped. When the same person posts multiple rows within 3 minutes of each other, they're treated as one drink and the later rows are dropped. This makes the total lower than the chat's running counter, which has been ticking up once per row including double-posts. Flip the toggle above to see the raw (undeduped) count.
         </footer>
       </div>
     </div>
